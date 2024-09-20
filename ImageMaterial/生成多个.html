@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>产品抠图工具</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f5f5f5;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            text-align: center;
+            padding: 50px;
+        }
+        h1 {
+            color: #4a90e2;
+            font-size: 2.5em;
+            margin-bottom: 20px;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .file-label {
+            padding: 15px 30px;
+            background-color: #4a90e2;
+            color: white;
+            font-size: 1.2em;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .file-label:hover {
+            background-color: #357ABD;
+        }
+        #generateButton {
+            padding: 15px 40px;
+            background-color: #28a745;
+            color: white;
+            font-size: 1.2em;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        #generateButton:hover {
+            background-color: #218838;
+        }
+        .file-info {
+            margin-top: 15px;
+            font-size: 1.2em;
+            color: #333;
+        }
+        .settings {
+            margin-top: 20px;
+        }
+        .checkbox-container {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .checkbox-container label {
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>产品抠图工具</h1>
+
+    <label for="imageInput" class="file-label">上传白底图</label>
+    <input type="file" id="imageInput" multiple accept="image/*">
+    
+    <div class="settings">
+        <label for="generateCount">选择产品数量：</label>
+        <div class="checkbox-container">
+            <!-- 允许用户选择多个数量组合，默认从2到10 -->
+            <label><input type="checkbox" value="2">2个</label>
+            <label><input type="checkbox" value="3">3个</label>
+            <label><input type="checkbox" value="4">4个</label>
+            <label><input type="checkbox" value="5">5个</label>
+            <label><input type="checkbox" value="6">6个</label>
+            <label><input type="checkbox" value="7">7个</label>
+            <label><input type="checkbox" value="8">8个</label>
+            <label><input type="checkbox" value="9">9个</label>
+            <label><input type="checkbox" value="10">10个</label>
+        </div>
+    </div>
+
+    <button id="generateButton">生成图片并下载</button>
+
+    <div class="file-info" id="fileInfo">尚未选择文件</div>
+
+</div>
+
+<canvas id="originalCanvas" style="display:none;"></canvas>
+<canvas id="resultCanvas" style="display:none;"></canvas>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+<script>
+    const imageInput = document.getElementById('imageInput');
+    const generateButton = document.getElementById('generateButton');
+    const checkboxes = document.querySelectorAll('.checkbox-container input[type="checkbox"]');
+    const fileInfo = document.getElementById('fileInfo');
+    const originalCanvas = document.getElementById('originalCanvas');
+    const resultCanvas = document.getElementById('resultCanvas');
+
+    let images = [];
+
+    imageInput.addEventListener('change', handleFileUpload);
+
+    // 处理多个图片上传
+    function handleFileUpload(event) {
+        images = [];
+        const files = event.target.files;
+        fileInfo.textContent = `已选择 ${files.length} 个文件`;
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
+            img.filename = file.name.split('.')[0]; // 保存文件名用于生成新文件名
+            img.onload = function() {
+                images.push(img);
+            };
+        }
+    }
+
+    generateButton.addEventListener('click', function() {
+        if (images.length === 0) {
+            alert('请先上传图片！');
+            return;
+        }
+
+        const selectedCounts = Array.from(checkboxes)
+            .filter(checkbox => checkbox.checked)
+            .map(checkbox => parseInt(checkbox.value));
+        
+        if (selectedCounts.length === 0) {
+            alert('请至少选择一个产品数量！');
+            return;
+        }
+
+        const zip = new JSZip(); // 创建ZIP对象
+
+        const processPromises = images.map(image => {
+            return Promise.all(selectedCounts.map(count => processImage(image, count, zip)));
+        });
+
+        // 确保所有图片处理完成后再生成 ZIP
+        Promise.all(processPromises).then(() => {
+            zip.generateAsync({ type: "blob" }).then(function(content) {
+                saveAs(content, "生成的图片.zip");
+            });
+        });
+    });
+
+    // 处理单个图片
+    function processImage(image, count, zip) {
+        return new Promise(resolve => {
+            const ctx = originalCanvas.getContext('2d');
+            originalCanvas.width = image.width;
+            originalCanvas.height = image.height;
+
+            // 将原图绘制到canvas上
+            ctx.drawImage(image, 0, 0);
+
+            // 获取像素数据
+            const imageData = ctx.getImageData(0, 0, image.width, image.height);
+            const data = imageData.data;
+
+            // 初始化边界
+            let minX = image.width, minY = image.height, maxX = 0, maxY = 0;
+
+            // 移除白色背景 (简单的颜色阈值处理)
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+                if (r > 240 && g > 240 && b > 240) {
+                    data[i + 3] = 0; // 设置透明
+                } else {
+                    // 更新边界
+                    const x = (i / 4) % image.width;
+                    const y = Math.floor(i / 4 / image.width);
+                    minX = Math.min(minX, x);
+                    minY = Math.min(minY, y);
+                    maxX = Math.max(maxX, x);
+                    maxY = Math.max(maxY, y);
+                }
+            }
+
+            // 更新图像数据
+            ctx.putImageData(imageData, 0, 0);
+
+            // 计算产品的实际尺寸和位置
+            const productWidth = maxX - minX;
+            const productHeight = maxY - minY;
+            const productDimensions = { width: productWidth, height: productHeight, offsetX: minX, offsetY: minY };
+
+            // 生成结果图片
+            generateImageWithMultipleProducts(image.filename, count, productDimensions, zip).then(resolve);
+        });
+    }
+
+    // 根据产品数量生成图片
+    function generateImageWithMultipleProducts(filename, count, productDimensions, zip) {
+        return new Promise(resolve => {
+            const resultCtx = resultCanvas.getContext('2d');
+            resultCanvas.width = 1500;
+            resultCanvas.height = 1500;
+
+            // 绘制白色背景
+            resultCtx.fillStyle = 'white';
+            resultCtx.fillRect(0, 0, 1500, 1500);
+
+            // 计算每个产品的大小（根据数量调整）
+            const scaleFactor = getScaleFactor(count, productDimensions.width, productDimensions.height); 
+            const productWidth = productDimensions.width * scaleFactor;
+            const productHeight = productDimensions.height * scaleFactor;
+
+            // 根据数量决定产品放置的位置
+            const positions = calculatePositions(count, productWidth, productHeight);
+
+            // 将产品绘制到指定位置
+            for (let i = 0; i < count; i++) {
+                const pos = positions[i];
+                resultCtx.drawImage(
+                    originalCanvas, 
+                    productDimensions.offsetX, productDimensions.offsetY, 
+                    productDimensions.width, productDimensions.height, 
+                    pos.x - productWidth / 2, pos.y - productHeight / 2, 
+                    productWidth, productHeight
+                );
+            }
+
+            // 将生成的图片转换为 Blob 并添加到 ZIP 文件中
+            resultCanvas.toBlob(function(blob) {
+                const fileName = `${filename}-${count}sets.jpg`; // 动态文件名
+                zip.file(fileName, blob);
+                resolve();
+            }, 'image/jpeg');
+        });
+    }
+
+    // 根据产品数量计算缩放比例
+    function getScaleFactor(count, originalWidth, originalHeight) {
+        let scaleFactor = 1;
+        const maxSize = 1500;
+        if (count === 1) {
+            scaleFactor = Math.min(maxSize / originalWidth, maxSize / originalHeight);
+        } else {
+            const gridCols = Math.ceil(Math.sqrt(count)); // 根据产品数量确定列数
+            const gridRows = Math.ceil(count / gridCols); // 确定行数
+            scaleFactor = Math.min((maxSize / gridCols) / originalWidth, (maxSize / gridRows) / originalHeight);
+        }
+        return scaleFactor;
+    }
+
+    // 根据产品数量计算位置，使产品在网格中居中
+    function calculatePositions(count, productWidth, productHeight) {
+        const positions = [];
+        const maxSize = 1500;
+        const gridCols = Math.ceil(Math.sqrt(count)); // 列数
+        const gridRows = Math.ceil(count / gridCols); // 行数
+        const cellWidth = maxSize / gridCols;
+        const cellHeight = maxSize / gridRows;
+
+        for (let row = 0; row < gridRows; row++) {
+            for (let col = 0; col < gridCols && positions.length < count; col++) {
+                const x = (col * cellWidth) + (cellWidth / 2);
+                const y = (row * cellHeight) + (cellHeight / 2);
+                positions.push({ x, y });
+            }
+        }
+
+        return positions;
+    }
+
+</script>
+
+</body>
+</html>
